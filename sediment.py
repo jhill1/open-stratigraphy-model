@@ -1,10 +1,86 @@
 from dolfin import *
 import numpy
 
-# Create mesh and define function space
-mesh = UnitSquare(10, 10)
-V = FunctionSpace(mesh, "Lagrange", 1)
-n = FacetNormal(mesh)
+class SedimentModel:
+    """A class to track a single sediment type
+       on a non-uniform domain, using diffusion only
+       to move sediment around
+    """
+
+    def __init__(self):
+        """Set up sensible initial values
+        """
+        self.V = None
+        self.FacetNorm = None
+        self.mesh = None
+        self.u0 = None
+
+    def set_mesh(self,mesh):
+        """Set which mesh to use and define function space"""
+        self.mesh = mesh
+        self.V = FunctionSpace(self.mesh, "Lagrange", 1)
+        self.n = FacetNormal(self.mesh)
+
+    def set_initial_conditions(self,expression):
+        self.u0 = expression
+
+    def init(self):
+        """Initialise the solvers, etc, and setup the problem
+        """
+        #self.bc = DirichletBC(self.V, self.u0, self.boundary)
+
+        # initial guess of solution
+        self.u_1 = interpolate(self.u0, self.V)
+
+        self.dt = 1      # time step
+
+        self.u = TrialFunction(self.V)
+        self.v = TestFunction(self.V)
+        self.f = Constant(0)
+        self.alpha = Constant(0.001)
+
+        self.t = self.dt
+        self.a = self.u*self.v*dx + self.dt*inner(nabla_grad(self.u), nabla_grad(self.v))*self.alpha*dx
+        self.L = (self.u_1 + self.dt*self.f)*self.v*dx
+        self.b = None
+        self.A = assemble(self.a)   # assemble only once, before the time stepping
+
+        self.u = Function(self.V)   # the unknown at a new time level
+        self.T = 10                 # total simulation time
+
+    def solve(self):
+        """Solve the problem"""
+        t = 0
+        while t <= self.T:
+            self.b = assemble(self.L)
+            #bc.apply(A, b)
+            solve(self.A, self.u.vector(), self.b)
+
+            self.b = assemble(self.L, tensor=self.b)
+            t += self.dt
+            #plot(u, interactive=True)
+            self.u_1.assign(self.u)
+
+    def sediment_height(self):
+        return self.u.vector().array()
+
+    def boundary(x, on_boundary):  # define the Dirichlet boundary
+        return on_boundary
+
+if __name__ == "__main__":
+    
+    #create a simple testcase
+    model = SedimentModel()
+    mesh = UnitSquare(10, 10)
+    model.set_mesh(mesh)
+    init_cond = Expression('x[0]') # simple slope
+    model.set_initial_conditions(init_cond)
+    model.init()
+    model.solve()
+    print model.sediment_height()
+
+
+        
 
 # left boundary marked as 0, right as 1
 #class LeftBoundary(SubDomain):
@@ -17,10 +93,6 @@ n = FacetNormal(mesh)
 #self.ds = Measure("ds")[exterior_facet_domains] 
 
 alpha = 3; beta = 1.2
-#u0 = Expression('1 + x[0]*x[0] + alpha*x[1]*x[1] + beta*t',
-#                alpha=alpha, beta=beta, t=0)
-u0 = Expression('x[0]+t',t=0)
-u0.t = 0
 
 #sea_level = Expression('a', a=0.0)
 #h0 = project(Expression('x[0]'),V)
@@ -29,38 +101,8 @@ u0.t = 0
 def boundary(x, on_boundary):  # define the Dirichlet boundary
     return on_boundary
 
-bc = DirichletBC(V, u0, boundary)
-
-# initial guess of solution
-u_1 = interpolate(u0, V)
-
-dt = 1      # time step
-
-u = TrialFunction(V)
-v = TestFunction(V)
-f = Constant(0)
-alpha = Constant(1.0)
-
-t = dt
-a = u*v*dx + dt*inner(nabla_grad(u), nabla_grad(v))*alpha*dx - v*alpha*dx
-L = (u_1 + dt*f)*v*dx
-b = None
-A = assemble(a)   # assemble only once, before the time stepping
-
-u = Function(V)   # the unknown at a new time level
-T = 10             # total simulation time
 
 
-while t <= T:
-    b = assemble(L)
-    u0.t = t
-    #bc.apply(A, b)
-    solve(A, u.vector(), b)
-
-    b = assemble(L, tensor=b)
-    t += dt
-    plot(u, interactive=True)
-    u_1.assign(u)
 
 # Define variational problem
 #v = TestFunction(V)
