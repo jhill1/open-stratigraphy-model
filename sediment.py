@@ -28,6 +28,7 @@ class SedimentModel:
         """Initialise the solvers, etc, and setup the problem
         """
         #self.bc = DirichletBC(self.V, self.u0, self.boundary)
+        tiny = 1e-16
 
         # initial guess of solution
         self.u_1 = interpolate(self.u0, self.V)
@@ -35,13 +36,20 @@ class SedimentModel:
         self.dt = 1      # time step
 
         self.u = TrialFunction(self.V)
+        self.h = interpolate(Expression('x[0]'),self.V)
+        plot(self.h+self.u_1,interactive=True)
+
+
         self.v = TestFunction(self.V)
         self.f = Constant(0)
-        self.alpha = Constant(0.001)
+        self.alpha = Constant(0.1)
 
         self.t = self.dt
-        self.a = self.u*self.v*dx + self.dt*inner(nabla_grad(self.u), nabla_grad(self.v))*self.alpha*dx
+        limit = (self.u_1 + abs(self.u_1))/(2*self.u_1 + tiny) # limiting term
+        self.a = (self.u)*self.v*dx + limit*self.dt*inner(nabla_grad(self.u+self.h), nabla_grad(self.v))*self.alpha*dx
         self.L = (self.u_1 + self.dt*self.f)*self.v*dx
+        F = self.a - self.L
+        self.a, self.L = system(F)
         self.b = None
         self.A = assemble(self.a)   # assemble only once, before the time stepping
 
@@ -60,9 +68,11 @@ class SedimentModel:
             t += self.dt
             #plot(u, interactive=True)
             self.u_1.assign(self.u)
+            #plot(model.sediment_height(),interactive=True)
+
 
     def sediment_height(self):
-        return self.u.vector().array()
+        return self.u_1+self.h
 
     def boundary(x, on_boundary):  # define the Dirichlet boundary
         return on_boundary
@@ -71,12 +81,13 @@ if __name__ == "__main__":
     
     #create a simple testcase
     model = SedimentModel()
-    mesh = UnitSquare(10, 10)
+    mesh = UnitSquare(10,10)
     model.set_mesh(mesh)
     init_cond = Expression('x[0]') # simple slope
     model.set_initial_conditions(init_cond)
     model.init()
     model.solve()
+    plot(model.sediment_height(),interactive=True)
     print model.sediment_height()
 
 
