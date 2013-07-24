@@ -1,5 +1,6 @@
 from dolfin import *
 import numpy
+import sys
 
 class SedimentModel:
     """A class to track a single sediment type
@@ -13,7 +14,10 @@ class SedimentModel:
         self.V = None
         self.FacetNorm = None
         self.mesh = None
-        self.u0 = None
+        self.s0 = None
+        self.end_time = 1
+        self.dt = 1
+        self.alpha = Constant(0.1)
 
     def set_mesh(self,mesh):
         """Set which mesh to use and define function space"""
@@ -21,40 +25,51 @@ class SedimentModel:
         self.V = FunctionSpace(self.mesh, "Lagrange", 1)
         self.n = FacetNormal(self.mesh)
 
-    def set_initial_conditions(self,expression):
-        self.u0 = expression
 
-    def init(self):
+    def set_initial_conditions(self,topography,sediment):
+        # Set the initial topography and sediment with
+        # UFL expressions
+        self.h0 = topography
+        self.s0 = sediment
+
+    def set_timestep(self,dt):
+        self.dt = dt
+
+    def set_end_time(self,time):
+        self.end_time = time
+
+    def init(self,plot_init=False):
         """Initialise the solvers, etc, and setup the problem
         """
-        #self.bc = DirichletBC(self.V, self.u0, self.boundary)
+
         tiny = 1e-16
 
         # initial guess of solution
-        self.u_1 = interpolate(self.u0, self.V)
+        self.s_1 = interpolate(self.s0, self.V)
+        self.s = TrialFunction(self.V)
+        self.h = interpolate(self.h0, self.V)
 
-        self.dt = 1      # time step
-
-        self.u = TrialFunction(self.V)
-        self.h = interpolate(Expression('x[0]'),self.V)
-        plot(self.h+self.u_1,interactive=True)
-
+        if (plot_init):
+            plot(get_total_height(),interactive=True)
 
         self.v = TestFunction(self.V)
         self.f = Constant(0)
-        self.alpha = Constant(0.1)
+        
+        # This limiter stops the diffuive process where the amount of sediment (s) is zero
+        limit = (self.s_1 + abs(self.s_1))/(2*self.s_1 + tiny) # limiting term
 
-        self.t = self.dt
-        limit = (self.u_1 + abs(self.u_1))/(2*self.u_1 + tiny) # limiting term
-        self.a = (self.u)*self.v*dx + limit*self.dt*inner(nabla_grad(self.u+self.h), nabla_grad(self.v))*self.alpha*dx
-        self.L = (self.u_1 + self.dt*self.f)*self.v*dx
+        # RHS
+        self.a = (self.s)*self.v*dx + limit*self.dt*inner(nabla_grad(self.s+self.h), nabla_grad(self.v))*self.alpha*dx
+        # LHS
+        self.L = (self.s_1 + self.dt*self.f)*self.v*dx
+        
         F = self.a - self.L
         self.a, self.L = system(F)
         self.b = None
         self.A = assemble(self.a)   # assemble only once, before the time stepping
 
-        self.u = Function(self.V)   # the unknown at a new time level
-        self.T = 10                 # total simulation time
+        self.s = Function(self.V)   # the unknown at a new time level
+        self.T = self.end_time      # total simulation time
 
     def solve(self):
         """Solve the problem"""
@@ -62,20 +77,37 @@ class SedimentModel:
         while t <= self.T:
             self.b = assemble(self.L)
             #bc.apply(A, b)
-            solve(self.A, self.u.vector(), self.b)
+            solve(self.A, self.s.vector(), self.b)
 
             self.b = assemble(self.L, tensor=self.b)
             t += self.dt
             #plot(u, interactive=True)
-            self.u_1.assign(self.u)
+            self.s_1.assign(self.s)
             #plot(model.sediment_height(),interactive=True)
 
+    def get_total_height_array(self):
+        return self.s_1.vector().array()+self.h.vector().array()
 
-    def sediment_height(self):
-        return self.u_1+self.h
+    def get_total_height(self):
+        return self.s_1+self.h
+
+    def get_sed_height_array(self):
+        return self.s_1.vector().array()
+
+    def get_sed_height(self):
+        return self.s_1
+
+    def get_topographic_height_array(self):
+        return self.h_1.vector().array()
+
+    def get_topographic_height(self):
+        return self.h_1
 
     def boundary(x, on_boundary):  # define the Dirichlet boundary
         return on_boundary
+
+    def set_diffusion_coeff(self,coeff):
+        self.alpha = Constant(coeff)
 
 if __name__ == "__main__":
     
@@ -84,65 +116,15 @@ if __name__ == "__main__":
     mesh = UnitSquare(10,10)
     model.set_mesh(mesh)
     init_cond = Expression('x[0]') # simple slope
-    model.set_initial_conditions(init_cond)
+    init_sed = Expression('x[0]') # this gives
+    # total of above gives a slope of 0 to 2 (over the unit square)
+    model.set_initial_conditions(init_cond,init_sed)
+    model.set_end_time(10)
+    model.set_diffusion_coeff(1)
     model.init()
     model.solve()
-    plot(model.sediment_height(),interactive=True)
-    print model.sediment_height()
+    # answer should be 1 everywhere
+    plot(model.get_total_height(),interactive=True)
+    print model.get_total_height_array()
 
 
-        
-
-# left boundary marked as 0, right as 1
-#class LeftBoundary(SubDomain):
-#    def inside(self, x, on_boundary):
-#        return x[0] < 0.5 + DOLFIN_EPS and on_boundary
-#left_boundary = LeftBoundary()
-#exterior_facet_domains = FacetFunction("uint", self.mesh)
-#exterior_facet_domains.set_all(1)
-#left_boundary.mark(exterior_facet_domains, 0)
-#self.ds = Measure("ds")[exterior_facet_domains] 
-
-alpha = 3; beta = 1.2
-
-#sea_level = Expression('a', a=0.0)
-#h0 = project(Expression('x[0]'),V)
-#h1 = project(Expression('x[0]'),V)
-
-def boundary(x, on_boundary):  # define the Dirichlet boundary
-    return on_boundary
-
-
-
-
-# Define variational problem
-#v = TestFunction(V)
-#A = Constant(1.0)
-#alpha = Constant(0.00001)
-#beta = Constant(0.01)
-#Fl = Constant(1.0)
-#h_td = 0.5*h0 + 0.5*h1
-#dt = 1
-#k = Constant(dt)
-#F = v*(h0 - h1)*dx + inner(grad(v),grad(h0))*k*alpha*dx - v*sea_level*k*dx
-#- v*alpha*inner(grad(h_td),n)*k*ds0
-#F = v*Fl*(h0 - h1)*dx + inner(grad(v),grad(h_td))*k*Fl*alpha*dx - v*sea_level*k*dx
-
-# Compute solution
-#plot(h0, interactive=True)
-#print h0.vector().array()
-
-#t = 0.0
-#T = 10.0
-#while t < T:
-#    solve(F == 0, h0)
-#    h1.assign(h0)
-#
-#    plot(h0, interactive=True)
-#    print h0.vector().array()
-#
-#    t = t+dt
- #   sea_level.a+=dt
- #   print sea_level.a
-#
-#    print t
